@@ -52,10 +52,10 @@ The video generation process is an automated pipeline that coordinates several l
 
 ```mermaid
 graph TD
-    A[Start: Topic & Parameters] --> B[1. Text Generation];
-    B -- Script & Image Prompts --> C[2. Image Generation];
-    B -- Script --> D[3. Text-to-Speech];
-    C -- Images --> E[4. Video Compilation];
+    A[Start: Topic & Parameters] --> B[1-Text Generation];
+    B -- Script & Image Prompts --> C[2-Image Generation];
+    B -- Script --> D[3-Text-to-Speech];
+    C -- Images --> E[4-Video Compilation];
     D -- Audio & Timestamps --> E;
     E -- Final Video --> F[End: Output Video File];
 
