@@ -1,4 +1,4 @@
-# 🎬 AI Video Generator
+# 🎬 Milkfish DIT
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python Version">

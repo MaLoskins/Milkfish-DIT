@@ -1077,7 +1077,7 @@ def validate_environment() -> bool:
 def main():
     """Enhanced main entry point with better argument handling."""
     parser = argparse.ArgumentParser(
-        description="AI Video Generator - Create videos with AI-generated content",
+        description="Milkfish DIT - Create videos with AI-generated content",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

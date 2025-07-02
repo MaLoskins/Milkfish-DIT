@@ -43,7 +43,7 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    print("Starting AI Video Generator Server...")
+    print("Starting Milkfish DIT Server...")
     
     # Ensure output directory exists
     output_dir = Path("../output")
@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
 
 # FastAPI app with enhanced configuration
 app = FastAPI(
-    title="AI Video Generator",
+    title="Milkfish DIT",
     description="Professional AI-powered video generation service",
     version="2.0.0",
     lifespan=lifespan
