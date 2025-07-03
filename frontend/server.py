@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -759,37 +759,3 @@ async def cancel_task(task_id: str):
             pass
     
     return {"message": "Task cancelled", "id": task_id}
-
-# Exception handlers
-@app.exception_handler(404)
-async def not_found_handler(request: Request, exc: HTTPException):
-    return JSONResponse(
-        status_code=404,
-        content={"error": "Not found", "detail": str(exc.detail)}
-    )
-
-@app.exception_handler(500)
-async def server_error_handler(request: Request, exc: Exception):
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "detail": "An unexpected error occurred",
-            "type": type(exc).__name__
-        }
-    )
-
-if __name__ == "__main__":
-    import uvicorn
-    
-    # Configure uvicorn for production use
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info",
-        access_log=True,
-        use_colors=True,
-        reload=False,  # Set to True for development
-        workers=1  # Single worker to maintain state
-    )

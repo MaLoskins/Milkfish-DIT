@@ -6,3 +6,6 @@ SD.json
 flux-kontext.json
 chats.db
 output
+__pycache__
+.pytest_cache
+ablation_tests
