@@ -47,7 +47,8 @@ class Config:
         "trustworthy": "pqHfZKP75CvOlQylNhV4",
         "friendly": "XrExE9yKIg1WjnnlVkGX",
         "intense": "N2lVS1w4EtoT3dr4eOWO",
-        "you_need_a_calc_for_that": "nF6oRtWvs9pNxDYGsbY5"
+        "you_need_a_calc_for_that": "nF6oRtWvs9pNxDYGsbY5",
+        "scary_deep": "G3zrXA9moYrFCgwBAvxJ"
     })
     
     def __post_init__(self):
