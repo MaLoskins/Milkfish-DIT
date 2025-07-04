@@ -13,6 +13,8 @@ This repository contains an advanced, modular application for automatically gene
 
 The project features a powerful command-line interface for single and batch operations, alongside a sleek FastAPI-powered web interface for interactive video creation and management.
 
+![Dashboard](frontend/dashboard.png)
+
 ## Table of Contents
 
 - [Key Features](#key-features)
