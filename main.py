@@ -1,4 +1,4 @@
-# Optimized main.py
+# Optimized main.py with progress tracking
 import subprocess
 import sys
 import os
@@ -102,6 +102,36 @@ class VideoGenerationResult:
     duration: Optional[float] = None
     metrics: Optional[Dict[str, Any]] = None
 
+class ProgressTracker:
+    """Tracks and reports progress to frontend"""
+    def __init__(self, output_dir: str):
+        self.output_dir = output_dir
+        self.progress_file = os.path.join(output_dir, "progress.json")
+        self.current_progress = 0
+        self.current_stage = "Initializing"
+        self.stage_details = {}
+        
+    def update(self, progress: int, stage: str, details: Dict[str, Any] = None):
+        """Update progress status"""
+        self.current_progress = max(0, min(100, progress))
+        self.current_stage = stage
+        if details:
+            self.stage_details.update(details)
+        
+        # Write to progress file
+        progress_data = {
+            "progress": self.current_progress,
+            "stage": self.current_stage,
+            "details": self.stage_details,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        try:
+            with open(self.progress_file, 'w') as f:
+                json.dump(progress_data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to write progress file: {e}")
+
 class ProcessManager:
     """Process management"""
     def __init__(self):
@@ -204,7 +234,7 @@ class ProcessManager:
         self.processes.clear()
 
 class VideoGenerator:
-    """Main video generator"""
+    """Main video generator with progress tracking"""
     def __init__(self, config: Config):
         self.config = config
         self.logger = logging.getLogger("VideoGenerator")
@@ -212,11 +242,12 @@ class VideoGenerator:
         self.text_generator = TextGenerator(config)
         self.tts_generator = TTSGenerator(config)
         self.max_workers = min(4, multiprocessing.cpu_count() - 1)
+        self.progress_tracker = None
     
     def generate_single_video(self, topic: str, prompt_type: str, model: str, voice: str,
                             voice_id: str, output_base_dir: str, run_id: int,
                             video_params: VideoParameters) -> VideoGenerationResult:
-        """Generate a single video"""
+        """Generate a single video with progress tracking"""
         start_time = time.time()
         metrics = {'text_time': 0, 'image_time': 0, 'audio_time': 0, 'video_time': 0}
         
@@ -230,6 +261,10 @@ class VideoGenerator:
         dirs = {k: os.path.join(run_dir, k) for k in ['texts', 'images', 'audio', 'video', 'logs']}
         for d in dirs.values():
             os.makedirs(d, exist_ok=True)
+        
+        # Initialize progress tracker
+        self.progress_tracker = ProgressTracker(run_dir)
+        self.progress_tracker.update(5, "Initializing", {"run_id": run_id, "topic": topic})
         
         # Save metadata
         self._save_metadata(run_dir, {
@@ -247,24 +282,28 @@ class VideoGenerator:
         
         try:
             # Text Generation
+            self.progress_tracker.update(10, "Generating text content")
             t = time.time()
             if not self._generate_text(topic, prompt_type, dirs['texts']):
                 raise ValueError("Text generation failed")
             metrics['text_time'] = time.time() - t
             
             # Image Generation
+            self.progress_tracker.update(30, "Starting image generation")
             t = time.time()
             if not self._generate_images(model, run_dir, dirs['images']):
                 raise ValueError("Image generation failed")
             metrics['image_time'] = time.time() - t
             
             # Audio Generation
+            self.progress_tracker.update(70, "Generating audio narration")
             t = time.time()
             if not self._generate_audio(dirs['texts'], dirs['audio'], voice_id):
                 raise ValueError("Audio generation failed")
             metrics['audio_time'] = time.time() - t
             
             # Video Creation
+            self.progress_tracker.update(80, "Creating final video")
             t = time.time()
             if not self._create_video(dirs, video_params):
                 raise ValueError("Video creation failed")
@@ -275,6 +314,7 @@ class VideoGenerator:
             metrics['total_time'] = duration
             
             self._save_metadata(run_dir, {"status": "completed", "metrics": metrics}, append=True)
+            self.progress_tracker.update(100, "Video generation complete!")
             
             self.logger.info(f"\n✓ Video generated in {duration:.1f}s")
             self.logger.info(f"  Text: {metrics['text_time']:.1f}s")
@@ -292,6 +332,8 @@ class VideoGenerator:
         except Exception as e:
             self.logger.error(f"\n✗ Error in run {run_id}: {str(e)}")
             self._save_metadata(run_dir, {"status": "failed", "error": str(e)}, append=True)
+            if self.progress_tracker:
+                self.progress_tracker.update(0, f"Failed: {str(e)}")
             
             return VideoGenerationResult(
                 success=False, run_id=run_id, topic=topic,
@@ -323,20 +365,34 @@ class VideoGenerator:
     
     def _generate_text(self, topic, prompt_type, texts_dir):
         self.logger.info("Phase 1: Text Generation")
+        self.progress_tracker.update(12, "Starting Ollama server")
         
         if not self.process_manager.start_ollama_server():
             return False
         
         try:
+            # Generate paragraph
+            self.progress_tracker.update(15, "Generating paragraph content")
             paragraph = self.text_generator.generate_content(prompt_type, topic)
             if not paragraph or "I can't fulfill this request" in paragraph:
                 self.logger.error(f"Text generation failed for topic: {topic}")
                 return False
             
             self.logger.info(f"Generated paragraph ({len(paragraph)} chars)")
+            self.progress_tracker.update(18, "Paragraph generated", {"paragraph_length": len(paragraph)})
             
-            descriptions = self.text_generator.extract_image_descriptions(prompt_type, paragraph, topic)
+            # Extract image descriptions with progress callback
+            self.progress_tracker.update(20, "Extracting image descriptions")
+            
+            def description_progress(current, total):
+                progress = 20 + int((current / total) * 8)  # 20-28% range
+                self.progress_tracker.update(progress, f"Image description {current}/{total}")
+            
+            descriptions = self.text_generator.extract_image_descriptions(
+                prompt_type, paragraph, topic, progress_callback=description_progress
+            )
             self.logger.info(f"Extracted {len(descriptions)} image descriptions")
+            self.progress_tracker.update(28, "Image descriptions complete", {"description_count": len(descriptions)})
             
             self.text_generator.save_texts(prompt_type, paragraph, descriptions, texts_dir)
             return True
@@ -349,16 +405,40 @@ class VideoGenerator:
     
     def _generate_images(self, model, run_dir, images_dir):
         self.logger.info("Phase 2: Image Generation")
+        self.progress_tracker.update(30, "Preparing image generation")
         
         try:
             cmd = [sys.executable, "image_generation.py", "--model", model, "--run-dir", run_dir]
             if self.logger.level <= logging.DEBUG:
                 cmd.append("--debug")
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            # Run with real-time output capture
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                     text=True, bufsize=1, universal_newlines=True)
             
-            if result.returncode != 0:
-                self.logger.error(f"Image generation failed:\n{result.stderr}")
+            # Monitor output for progress updates
+            for line in iter(process.stdout.readline, ''):
+                if line.strip():
+                    if "PROGRESS:" in line:
+                        # Parse progress update from image generation
+                        try:
+                            parts = line.split("PROGRESS:")[1].strip().split("|")
+                            if len(parts) >= 2:
+                                progress = int(parts[0])
+                                stage = parts[1]
+                                # Map image generation progress (0-100) to overall progress (30-70)
+                                mapped_progress = 30 + int(progress * 0.4)
+                                self.progress_tracker.update(mapped_progress, stage)
+                        except:
+                            pass
+                    else:
+                        self.logger.debug(line.strip())
+            
+            process.wait()
+            
+            if process.returncode != 0:
+                stderr = process.stderr.read()
+                self.logger.error(f"Image generation failed:\n{stderr}")
                 return False
             
             images = glob.glob(os.path.join(images_dir, "*.png"))
@@ -367,6 +447,7 @@ class VideoGenerator:
                 return False
             
             self.logger.info(f"✓ Generated {len(images)} images")
+            self.progress_tracker.update(70, "Image generation complete", {"image_count": len(images)})
             return True
             
         except subprocess.TimeoutExpired:
@@ -378,6 +459,7 @@ class VideoGenerator:
     
     def _generate_audio(self, texts_dir, audio_dir, voice_id):
         self.logger.info("Phase 3: Text-to-Speech")
+        self.progress_tracker.update(72, "Starting audio generation")
         
         try:
             paragraph_file = os.path.join(texts_dir, "paragraph.txt")
@@ -387,12 +469,24 @@ class VideoGenerator:
                 self.logger.error("Paragraph file not found")
                 return False
             
-            success = self.tts_generator.generate_audio(paragraph_file, audio_file, voice_id, max_retries=3)
+            # Add progress callback
+            def audio_progress(status):
+                if status == "uploading":
+                    self.progress_tracker.update(74, "Uploading to ElevenLabs")
+                elif status == "processing":
+                    self.progress_tracker.update(76, "Processing audio")
+                elif status == "downloading":
+                    self.progress_tracker.update(78, "Downloading audio file")
+            
+            success = self.tts_generator.generate_audio(
+                paragraph_file, audio_file, voice_id, max_retries=3, progress_callback=audio_progress
+            )
             
             if not success or not os.path.exists(audio_file):
                 return False
             
             self.logger.info(f"✓ Audio generated ({os.path.getsize(audio_file) / 1024:.1f} KB)")
+            self.progress_tracker.update(80, "Audio generation complete")
             return True
             
         except Exception as e:
@@ -401,6 +495,7 @@ class VideoGenerator:
     
     def _create_video(self, dirs, video_params):
         self.logger.info("Phase 4: Video Creation")
+        self.progress_tracker.update(82, "Initializing video creation")
         
         try:
             audio_path = os.path.join(dirs['audio'], "paragraph.mp3")
@@ -417,6 +512,14 @@ class VideoGenerator:
             
             params = video_params.to_dict()
             
+            # Add progress callback
+            def video_progress(progress, stage):
+                # Map video creation progress (0-100) to overall progress (82-100)
+                mapped_progress = 82 + int(progress * 0.18)
+                self.progress_tracker.update(mapped_progress, f"Video: {stage}")
+            
+            params['progress_callback'] = video_progress
+            
             create_video(
                 audio_path=audio_path,
                 images_dir=dirs['images'],
@@ -432,6 +535,7 @@ class VideoGenerator:
                 return False
             
             self.logger.info(f"✓ Video created ({os.path.getsize(output_video) / (1024*1024):.1f} MB)")
+            self.progress_tracker.update(100, "Video creation complete")
             return True
             
         except Exception as e:

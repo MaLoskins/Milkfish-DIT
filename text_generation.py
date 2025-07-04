@@ -5,7 +5,7 @@ import sys
 import re
 import time
 import logging
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Tuple, Callable
 from dataclasses import dataclass
 
 from langchain_ollama import OllamaLLM
@@ -81,9 +81,10 @@ class TextGenerator:
         prompt_type: str,
         paragraph: str,
         topic: str,
-        max_descriptions: int = 20
+        max_descriptions: int = 20,
+        progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> List[str]:
-        """Extract image descriptions from the paragraph."""
+        """Extract image descriptions from the paragraph with progress callback."""
         try:
             # Get sentences from paragraph
             sentences = self._split_into_sentences(paragraph)
@@ -91,6 +92,7 @@ class TextGenerator:
             
             all_descriptions = []
             previous_descriptions = set()
+            total_expected = min(max_descriptions, sum(self._calculate_image_count(s) for s in sentences))
             
             for sentence in sentences:
                 # Determine image count based on sentence length
@@ -109,6 +111,10 @@ class TextGenerator:
                     if description and description not in previous_descriptions:
                         previous_descriptions.add(description)
                         all_descriptions.append(description)
+                        
+                        # Report progress
+                        if progress_callback:
+                            progress_callback(len(all_descriptions), total_expected)
                 
                 if len(all_descriptions) >= max_descriptions:
                     break

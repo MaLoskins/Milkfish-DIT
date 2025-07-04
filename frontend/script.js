@@ -1,4 +1,4 @@
-// Optimized frontend JavaScript with Queue Support
+// Optimized frontend JavaScript with enhanced progress display
 const state = {
     config: {},
     videos: [],
@@ -194,11 +194,54 @@ const ui = {
         if (btnLoader) btnLoader.style.display = enabled ? 'none' : 'inline-flex';
     },
     
-    updateProgress(progress, stage) {
+    updateProgress(progress, stage, details = null) {
         const progressFill = $('progressFill');
         const progressStage = $('progressStage');
         if (progressFill) progressFill.style.width = progress + '%';
-        if (progressStage) progressStage.textContent = stage + (progress > 0 && progress < 100 ? ` (${progress}%)` : '');
+        
+        if (progressStage) {
+            let stageText = stage;
+            
+            // Format stage text based on progress
+            if (progress === 0) {
+                stageText = 'Initializing...';
+            } else if (progress === 100) {
+                stageText = '✓ ' + stage;
+            } else {
+                // Add progress percentage to stage text
+                stageText = `${stage} (${progress}%)`;
+            }
+            
+            progressStage.textContent = stageText;
+        }
+        
+        // Add visual feedback for different stages
+        if (progressFill) {
+            // Change color based on progress
+            if (progress < 20) {
+                // Text generation phase - purple
+                progressFill.style.background = 'var(--accent-gradient)';
+            } else if (progress < 70) {
+                // Image generation phase - orange to yellow
+                progressFill.style.background = 'linear-gradient(135deg, var(--accent) 0%, #f59e0b 100%)';
+            } else if (progress < 80) {
+                // TTS phase - yellow to green
+                progressFill.style.background = 'linear-gradient(135deg, #f59e0b 0%, var(--success) 100%)';
+            } else if (progress < 100) {
+                // Video creation phase - green
+                progressFill.style.background = 'linear-gradient(135deg, var(--success) 0%, #059669 100%)';
+            } else {
+                // Complete - solid green
+                progressFill.style.background = 'var(--success)';
+            }
+            
+            // Add glow effect during generation
+            if (progress > 0 && progress < 100) {
+                progressFill.style.boxShadow = '0 0 20px rgba(139, 92, 246, 0.6)';
+            } else {
+                progressFill.style.boxShadow = '0 0 10px var(--accent-glow)';
+            }
+        }
     }
 };
 
@@ -362,8 +405,8 @@ const queue = {
         
         // Update UI
         const startBtn = $('startQueueBtn');
-        const btnText = $$('.btn-text', startBtn);
-        const btnLoader = $$('.btn-loader', startBtn);
+        const btnText = $('.btn-text', startBtn);
+        const btnLoader = $('.btn-loader', startBtn);
         if (btnText) btnText.style.display = 'none';
         if (btnLoader) btnLoader.style.display = 'inline-flex';
         startBtn.disabled = true;
@@ -528,7 +571,7 @@ async function init() {
         $('filterPromptType').onchange = handleFilter;
         $('searchVideos').oninput = utils.debounce(handleSearch, 300);
         
-        const modalClose = $$('.modal-close');
+        const modalClose = $('.modal-close');
         if (modalClose) modalClose.onclick = closeModal;
         
         $('videoModal').onclick = e => e.target === $('videoModal') && closeModal();
@@ -644,18 +687,68 @@ function handleAddToQueue(e) {
 
 function startProgressMonitoring() {
     let failCount = 0;
+    let lastProgress = 0;
+    let lastStage = '';
     
     state.progressInterval = setInterval(async () => {
         try {
             const status = await api.get(`/api/status/${state.currentTaskId}`);
             failCount = 0;
             
-            ui.updateProgress(status.progress, status.stage);
+            // Create detailed stage message with sub-progress
+            let detailedStage = status.stage;
+            if (status.details) {
+                const details = status.details;
+                
+                // Add text generation details
+                if (details.text_generation) {
+                    const tg = details.text_generation;
+                    if (status.stage.includes("image descriptions") && tg.descriptions_count > 0) {
+                        detailedStage = `Extracting image descriptions (${tg.descriptions_completed}/${tg.descriptions_count})`;
+                    }
+                }
+                
+                // Add image generation details
+                if (details.image_generation && details.image_generation.total > 0) {
+                    const ig = details.image_generation;
+                    if (status.stage.includes("Generating image")) {
+                        detailedStage = `Generating image ${ig.completed}/${ig.total}`;
+                    }
+                }
+                
+                // Add more context for TTS stages
+                if (details.tts && status.stage.includes("audio")) {
+                    if (status.stage === "Processing audio") {
+                        detailedStage = "Processing audio with ElevenLabs...";
+                    }
+                }
+                
+                // Video stage is already detailed from backend
+            }
+            
+            ui.updateProgress(status.progress, detailedStage, status.details);
+            
+            // Log all progress changes for debugging
+            if (status.progress !== lastProgress || detailedStage !== lastStage) {
+                console.log(`Progress: ${status.progress}% - ${detailedStage}`);
+                if (status.details) {
+                    console.log('Details:', status.details);
+                }
+                lastProgress = status.progress;
+                lastStage = detailedStage;
+            }
             
             if (status.status === 'completed') {
                 clearInterval(state.progressInterval);
-                ui.updateProgress(100, '✓ Video generated successfully!');
+                ui.updateProgress(100, 'Video generated successfully!');
                 ui.showNotification('Video generated successfully!', 'success');
+                
+                // Play a subtle sound notification if available
+                try {
+                    const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYmLjpGTlpqbnZ+ipaepq62vsLO1t7m7vb7Aw8XGx8nKy8zNzs/Q0NHR0tLS0tLS0tHR0dDQ0M/Pzs7NzczLysnIx8bFxMPCwb+/vbu6uLa1s7GxsK6sqKWjoJ6bmZaTkY+MiIWDgH57eHZzcG5tam1ucXN1d3p8foCDh4qMjpGTlZibnqCjpqirrrCys7e3uru8vb6/wMHBwsPDxMXFxsbHx8fIyMjJycrKysvLzMzMzs7Oz9HR0tPT1NTV1dXV1tbW1tbW1tbW1tbW1tbW1tXV1dXV1NTU1NTT09LT0tLR0dHQ0NDPz8/Ozs7Ozc3NzMzMy8vLysrKycnJyMjIx8fHxsbGxcXFxMTEw8PDwsLCwcHBwMDAwMC/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/wMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcDAwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcDA');
+                    audio.volume = 0.3;
+                    audio.play().catch(() => {});
+                } catch (e) {}
                 
                 setTimeout(() => {
                     resetForm();
@@ -675,7 +768,7 @@ function startProgressMonitoring() {
                 resetForm();
             }
         }
-    }, 2000);
+    }, 500); // Check every 500ms for smoother progress updates
 }
 
 function resetForm() {
@@ -762,7 +855,7 @@ function renderGallery() {
     if (videoGallery) {
         videoGallery.innerHTML = pageVideos.map(createVideoCard).join('');
         
-        $$$('.video-card', videoGallery).forEach((card, i) => {
+        $$('.video-card', videoGallery).forEach((card, i) => {
             card.style.animationDelay = `${i * 50}ms`;
             card.classList.add('fade-in');
         });

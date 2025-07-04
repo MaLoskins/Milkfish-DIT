@@ -5,7 +5,7 @@ import json
 import base64
 import time
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Callable
 from pathlib import Path
 import requests
 import sys
@@ -13,7 +13,7 @@ from config import Config
 
 
 class TTSGenerator:
-    """Handles text-to-speech generation using ElevenLabs API."""
+    """Handles text-to-speech generation using ElevenLabs API with progress reporting."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -28,9 +28,10 @@ class TTSGenerator:
         paragraph_file: str,
         output_path: str,
         voice_id: str,
-        max_retries: int = 3
+        max_retries: int = 3,
+        progress_callback: Optional[Callable[[str], None]] = None
     ) -> bool:
-        """Generate audio from text file with retry logic."""
+        """Generate audio from text file with retry logic and progress reporting."""
         try:
             # Read the paragraph
             with open(paragraph_file, "r", encoding="utf-8") as f:
@@ -43,10 +44,14 @@ class TTSGenerator:
             self.logger.info(f"Generating audio for {os.path.basename(paragraph_file)} with voice {voice_id}")
             self.logger.debug(f"Text length: {len(paragraph)} characters")
             
+            # Report initial progress
+            if progress_callback:
+                progress_callback("uploading")
+            
             # Attempt generation with retries
             for attempt in range(max_retries):
                 try:
-                    success = self._call_elevenlabs_api(paragraph, output_path, voice_id)
+                    success = self._call_elevenlabs_api(paragraph, output_path, voice_id, progress_callback)
                     if success:
                         return True
                     
@@ -74,9 +79,10 @@ class TTSGenerator:
         self,
         text: str,
         output_path: str,
-        voice_id: str
+        voice_id: str,
+        progress_callback: Optional[Callable[[str], None]] = None
     ) -> bool:
-        """Make API call to ElevenLabs."""
+        """Make API call to ElevenLabs with progress reporting."""
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps"
         
         headers = {
@@ -97,11 +103,20 @@ class TTSGenerator:
         }
         
         self.logger.debug("Making API request to ElevenLabs...")
+        
+        # Report processing progress
+        if progress_callback:
+            progress_callback("processing")
+        
         response = requests.post(url, json=data, headers=headers, timeout=60)
         response.raise_for_status()
         
         # Process response
         response_dict = response.json()
+        
+        # Report download progress
+        if progress_callback:
+            progress_callback("downloading")
         
         # Decode audio
         if "audio_base64" not in response_dict:
@@ -213,8 +228,12 @@ def main():
     # Initialize generator
     generator = TTSGenerator(config)
     
+    # Progress callback for testing
+    def progress_cb(status):
+        print(f"TTS Progress: {status}")
+    
     # Generate audio
-    success = generator.generate_audio(args.input_file, args.output_file, args.voice)
+    success = generator.generate_audio(args.input_file, args.output_file, args.voice, progress_callback=progress_cb)
     
     if success:
         print("✓ Audio generation successful")

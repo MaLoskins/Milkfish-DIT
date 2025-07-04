@@ -1,4 +1,4 @@
-# Optimized frontend server
+# Optimized frontend server with enhanced progress tracking
 import os
 import sys
 import json
@@ -171,7 +171,7 @@ async def generate_video(request: GenerateRequest, background_tasks: BackgroundT
     
     task_id = str(uuid.uuid4())
     
-    # Initialize task
+    # Initialize task with detailed progress tracking
     active_tasks[task_id] = {
         "id": task_id,
         "status": "starting",
@@ -180,7 +180,27 @@ async def generate_video(request: GenerateRequest, background_tasks: BackgroundT
         "topic": request.topic,
         "created_at": datetime.now().isoformat(),
         "output_dir": None,
-        "error": None
+        "error": None,
+        "details": {
+            "text_generation": {
+                "paragraph": False,
+                "descriptions_count": 0,
+                "descriptions_completed": 0
+            },
+            "image_generation": {
+                "total": 0,
+                "completed": 0,
+                "current": None
+            },
+            "tts": {
+                "started": False,
+                "completed": False
+            },
+            "video": {
+                "started": False,
+                "completed": False
+            }
+        }
     }
     
     # Start generation in background
@@ -189,10 +209,11 @@ async def generate_video(request: GenerateRequest, background_tasks: BackgroundT
     return {"task_id": task_id, "message": "Video generation started"}
 
 async def run_generation(task_id: str, request: GenerateRequest):
-    """Run video generation"""
+    """Run video generation with enhanced progress tracking"""
     try:
         active_tasks[task_id]["status"] = "running"
-        active_tasks[task_id]["progress"] = 5
+        active_tasks[task_id]["progress"] = 2
+        active_tasks[task_id]["stage"] = "Starting generation"
         
         # Create video parameters
         video_params = VideoParameters(
@@ -214,11 +235,11 @@ async def run_generation(task_id: str, request: GenerateRequest):
         output_path = parent_dir / "output"
         run_id = len([d for d in output_path.iterdir() if d.is_dir()]) + 1
         
-        # Run generation
+        # Run generation with enhanced monitoring
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             app_config.executor,
-            generate_video_sync,
+            generate_video_sync_enhanced,
             task_id,
             request,
             voice_id,
@@ -230,7 +251,7 @@ async def run_generation(task_id: str, request: GenerateRequest):
             active_tasks[task_id].update({
                 "status": "completed",
                 "progress": 100,
-                "stage": "Completed",
+                "stage": "Video generation complete!",
                 "output_dir": result.output_dir,
                 "video_path": os.path.join(result.output_dir, "video", "final_video.mp4")
             })
@@ -251,35 +272,128 @@ async def run_generation(task_id: str, request: GenerateRequest):
         if task_id in active_tasks:
             del active_tasks[task_id]
 
-def generate_video_sync(task_id, request, voice_id, run_id, video_params):
-    """Synchronous video generation with progress monitoring"""
-    # Monitor progress
-    def monitor_progress():
-        while task_id in active_tasks and active_tasks[task_id]["status"] == "running":
-            if active_tasks[task_id].get("output_dir"):
-                output_dir = Path(active_tasks[task_id]["output_dir"])
-                if output_dir.exists():
-                    # Update progress based on file creation
-                    if (output_dir / "texts" / "paragraph.txt").exists():
-                        active_tasks[task_id]["stage"] = "Generating images"
-                        active_tasks[task_id]["progress"] = 30
-                    if list((output_dir / "images").glob("*.png")):
-                        active_tasks[task_id]["stage"] = "Generating audio"
-                        active_tasks[task_id]["progress"] = 60
-                    if (output_dir / "audio" / "paragraph.mp3").exists():
-                        active_tasks[task_id]["stage"] = "Creating video"
-                        active_tasks[task_id]["progress"] = 80
-            time.sleep(2)
-    
+def generate_video_sync_enhanced(task_id, request, voice_id, run_id, video_params):
+    """Enhanced synchronous video generation with detailed progress tracking"""
     import threading
     import time
+    import logging
+    from queue import Queue
+    
+    # Create a custom logger handler to capture progress
+    progress_queue = Queue()
+    
+    class ProgressHandler(logging.Handler):
+        def emit(self, record):
+            msg = self.format(record)
+            # Parse progress messages
+            if "Generated paragraph" in msg:
+                progress_queue.put(("text", "paragraph_complete", None))
+            elif "Extracted" in msg and "image descriptions" in msg:
+                try:
+                    count = int(msg.split("Extracted ")[1].split(" image")[0])
+                    progress_queue.put(("text", "descriptions_complete", count))
+                except:
+                    pass
+            elif "Image description" in msg:
+                try:
+                    parts = msg.split("Image description ")[1].split("/")
+                    current = int(parts[0])
+                    total = int(parts[1])
+                    progress_queue.put(("text", "description_progress", (current, total)))
+                except:
+                    pass
+            elif "Generating image" in msg:
+                try:
+                    parts = msg.split("Generating image ")[1].split("/")
+                    current = int(parts[0])
+                    total = int(parts[1])
+                    progress_queue.put(("image", "progress", (current, total)))
+                except:
+                    pass
+            elif "Processing image" in msg:
+                try:
+                    parts = msg.split("Processing image ")[1].split("/")
+                    current = int(parts[0])
+                    total = int(parts[1])
+                    progress_queue.put(("image", "progress", (current, total)))
+                except:
+                    pass
+            elif "Uploading to ElevenLabs" in msg:
+                progress_queue.put(("tts", "uploading", None))
+            elif "Processing audio" in msg:
+                progress_queue.put(("tts", "processing", None))
+            elif "Downloading audio file" in msg:
+                progress_queue.put(("tts", "downloading", None))
+            elif "Audio generation complete" in msg:
+                progress_queue.put(("tts", "complete", None))
+            elif "Video:" in msg:
+                progress_queue.put(("video", "progress", msg.split("Video: ")[1]))
+            elif "Video creation complete" in msg:
+                progress_queue.put(("video", "complete", None))
+    
+    # Add our handler to the logger
+    logger = logging.getLogger("VideoGenerator")
+    progress_handler = ProgressHandler()
+    progress_handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(progress_handler)
+    
+    # Monitor progress from multiple sources
+    def monitor_progress():
+        while task_id in active_tasks and active_tasks[task_id]["status"] == "running":
+            # Check progress queue
+            while not progress_queue.empty():
+                try:
+                    category, event, data = progress_queue.get_nowait()
+                    update_task_progress(task_id, category, event, data)
+                except:
+                    pass
+            
+            # Also monitor progress file if available
+            if active_tasks[task_id].get("output_dir"):
+                output_dir = Path(active_tasks[task_id]["output_dir"])
+                progress_file = output_dir / "progress.json"
+                
+                if progress_file.exists():
+                    try:
+                        with open(progress_file, 'r') as f:
+                            progress_data = json.load(f)
+                        
+                        # Update main progress if file has newer data
+                        file_progress = progress_data.get("progress", 0)
+                        if file_progress > active_tasks[task_id]["progress"]:
+                            active_tasks[task_id]["progress"] = file_progress
+                            active_tasks[task_id]["stage"] = progress_data.get("stage", "Processing")
+                            
+                            # Merge details
+                            if "details" in progress_data:
+                                for key, value in progress_data["details"].items():
+                                    if key in active_tasks[task_id]["details"]:
+                                        active_tasks[task_id]["details"][key].update(value)
+                    except:
+                        pass
+            
+            time.sleep(0.2)  # Check 5 times per second for smooth updates
+    
     monitor_thread = threading.Thread(target=monitor_progress, daemon=True)
     monitor_thread.start()
     
-    # Fix image generation path
-    original_method = app_config.video_generator._generate_images
+    # Override methods to capture progress
+    original_generate_text = app_config.video_generator._generate_text
+    original_generate_images = app_config.video_generator._generate_images
+    original_generate_audio = app_config.video_generator._generate_audio
+    original_create_video = app_config.video_generator._create_video
     
-    def fixed_generate_images(self, model, run_dir, images_dir):
+    def enhanced_generate_text(self, topic, prompt_type, texts_dir):
+        update_task_progress(task_id, "text", "started", None)
+        result = original_generate_text(topic, prompt_type, texts_dir)
+        if result:
+            update_task_progress(task_id, "text", "completed", None)
+        return result
+    
+    def enhanced_generate_images(self, model, run_dir, images_dir):
+        update_task_progress(task_id, "image", "started", None)
+        
+        # Fix the path issue and capture image generation progress
         import subprocess
         import logging
         logger = logging.getLogger("VideoGenerator")
@@ -288,29 +402,78 @@ def generate_video_sync(task_id, request, voice_id, run_id, video_params):
             image_gen_path = app_config.parent_dir / "image_generation.py"
             cmd = [sys.executable, str(image_gen_path), "--model", model, "--run-dir", run_dir]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            # Run with real-time output capture
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, 
+                                     text=True, bufsize=1, universal_newlines=True)
             
-            if result.returncode != 0:
-                logger.error(f"Image generation failed:\n{result.stderr}")
+            # Monitor output for progress updates
+            for line in iter(process.stdout.readline, ''):
+                if line.strip():
+                    if "PROGRESS:" in line:
+                        try:
+                            parts = line.split("PROGRESS:")[1].strip().split("|")
+                            if len(parts) >= 2:
+                                progress = int(parts[0])
+                                stage = parts[1]
+                                
+                                # Extract image count from stage
+                                if "Generating image" in stage:
+                                    img_parts = stage.split("Generating image ")[1].split("/")
+                                    current = int(img_parts[0])
+                                    total = int(img_parts[1])
+                                    update_task_progress(task_id, "image", "progress", (current, total))
+                        except:
+                            pass
+                    else:
+                        logger.debug(line.strip())
+            
+            process.wait()
+            
+            if process.returncode != 0:
+                stderr = process.stderr.read()
+                logger.error(f"Image generation failed:\n{stderr}")
                 return False
             
             import glob
-            if not glob.glob(os.path.join(images_dir, "*.png")):
+            images = glob.glob(os.path.join(images_dir, "*.png"))
+            if not images:
                 logger.error("No images were generated")
                 return False
             
+            update_task_progress(task_id, "image", "completed", len(images))
             return True
+            
         except Exception as e:
             logger.error(f"Image generation error: {e}")
             return False
     
-    # Apply fix
-    app_config.video_generator._generate_images = fixed_generate_images.__get__(
+    def enhanced_generate_audio(self, texts_dir, audio_dir, voice_id):
+        update_task_progress(task_id, "tts", "started", None)
+        result = original_generate_audio(texts_dir, audio_dir, voice_id)
+        if result:
+            update_task_progress(task_id, "tts", "completed", None)
+        return result
+    
+    def enhanced_create_video(self, dirs, video_params):
+        update_task_progress(task_id, "video", "started", None)
+        result = original_create_video(dirs, video_params)
+        if result:
+            update_task_progress(task_id, "video", "completed", None)
+        return result
+    
+    # Apply enhanced methods
+    app_config.video_generator._generate_text = enhanced_generate_text.__get__(
         app_config.video_generator, type(app_config.video_generator)
     )
-    
-    # Store output directory in task
-    active_tasks[task_id]["output_dir"] = None
+    app_config.video_generator._generate_images = enhanced_generate_images.__get__(
+        app_config.video_generator, type(app_config.video_generator)
+    )
+    app_config.video_generator._generate_audio = enhanced_generate_audio.__get__(
+        app_config.video_generator, type(app_config.video_generator)
+    )
+    app_config.video_generator._create_video = enhanced_create_video.__get__(
+        app_config.video_generator, type(app_config.video_generator)
+    )
     
     # Generate video
     result = app_config.video_generator.generate_single_video(
@@ -328,11 +491,112 @@ def generate_video_sync(task_id, request, voice_id, run_id, video_params):
     if result.output_dir:
         active_tasks[task_id]["output_dir"] = result.output_dir
     
+    # Clean up handler
+    logger.removeHandler(progress_handler)
+    
     return result
+
+def update_task_progress(task_id, category, event, data):
+    """Update task progress based on category and event"""
+    if task_id not in active_tasks:
+        return
+    
+    task = active_tasks[task_id]
+    details = task["details"]
+    
+    # Calculate overall progress based on phase weights
+    # Text: 0-20%, Images: 20-70%, TTS: 70-80%, Video: 80-100%
+    
+    if category == "text":
+        if event == "started":
+            task["stage"] = "Generating text content"
+            task["progress"] = 5
+        elif event == "paragraph_complete":
+            details["text_generation"]["paragraph"] = True
+            task["stage"] = "Paragraph generated, extracting image descriptions"
+            task["progress"] = 10
+        elif event == "description_progress":
+            current, total = data
+            details["text_generation"]["descriptions_count"] = total
+            details["text_generation"]["descriptions_completed"] = current
+            task["stage"] = f"Extracting image descriptions ({current}/{total})"
+            task["progress"] = 10 + int((current / total) * 8)  # 10-18%
+        elif event == "descriptions_complete":
+            details["text_generation"]["descriptions_count"] = data
+            details["text_generation"]["descriptions_completed"] = data
+            task["stage"] = f"Text generation complete ({data} descriptions)"
+            task["progress"] = 20
+        elif event == "completed":
+            task["progress"] = 20
+    
+    elif category == "image":
+        if event == "started":
+            task["stage"] = "Starting image generation"
+            task["progress"] = 22
+        elif event == "progress":
+            current, total = data
+            details["image_generation"]["total"] = total
+            details["image_generation"]["completed"] = current
+            details["image_generation"]["current"] = current
+            task["stage"] = f"Generating image {current}/{total}"
+            # Images take up 20-70% of progress
+            task["progress"] = 20 + int((current / total) * 50)
+        elif event == "completed":
+            total = data
+            details["image_generation"]["total"] = total
+            details["image_generation"]["completed"] = total
+            task["stage"] = f"Image generation complete ({total} images)"
+            task["progress"] = 70
+    
+    elif category == "tts":
+        if event == "started":
+            details["tts"]["started"] = True
+            task["stage"] = "Starting text-to-speech"
+            task["progress"] = 72
+        elif event == "uploading":
+            task["stage"] = "Uploading to ElevenLabs"
+            task["progress"] = 74
+        elif event == "processing":
+            task["stage"] = "Processing audio"
+            task["progress"] = 76
+        elif event == "downloading":
+            task["stage"] = "Downloading audio file"
+            task["progress"] = 78
+        elif event == "completed" or event == "complete":
+            details["tts"]["completed"] = True
+            task["stage"] = "Audio generation complete"
+            task["progress"] = 80
+    
+    elif category == "video":
+        if event == "started":
+            details["video"]["started"] = True
+            task["stage"] = "Starting video creation"
+            task["progress"] = 82
+        elif event == "progress":
+            task["stage"] = f"Video: {data}"
+            # Estimate progress between 82-98%
+            if "Processing image" in str(data):
+                try:
+                    parts = str(data).split("Processing image ")[1].split("/")
+                    current = int(parts[0])
+                    total = int(parts[1])
+                    task["progress"] = 82 + int((current / total) * 10)  # 82-92%
+                except:
+                    pass
+            elif "Applying transitions" in str(data):
+                task["progress"] = 93
+            elif "Adding subtitles" in str(data):
+                task["progress"] = 95
+            elif "Encoding video" in str(data):
+                task["progress"] = 97
+        elif event == "completed" or event == "complete":
+            details["video"]["completed"] = True
+            task["stage"] = "Video creation complete!"
+            task["progress"] = 100
 
 @app.get("/api/status/{task_id}")
 async def get_status(task_id: str):
-    """Get task status"""
+    """Get detailed task status"""
     if task_id not in active_tasks:
         raise HTTPException(404, "Task not found")
     
@@ -344,7 +608,8 @@ async def get_status(task_id: str):
         "progress": task["progress"],
         "stage": task["stage"],
         "created_at": task["created_at"],
-        "error": task.get("error")
+        "error": task.get("error"),
+        "details": task.get("details", {})
     }
 
 @app.get("/api/videos")
@@ -496,7 +761,8 @@ async def list_tasks():
                 "progress": task["progress"],
                 "stage": task["stage"],
                 "topic": task["topic"],
-                "created_at": task["created_at"]
+                "created_at": task["created_at"],
+                "details": task.get("details", {})
             }
             for task in active_tasks.values()
         ]

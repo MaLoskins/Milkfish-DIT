@@ -28,7 +28,7 @@ class ImageGenerationResult:
 
 
 class ImageGenerator:
-    """Handles image generation using ComfyUI API."""
+    """Handles image generation using ComfyUI API with progress reporting."""
     
     def __init__(self, config: Config):
         self.config = config
@@ -71,30 +71,46 @@ class ImageGenerator:
         self.logger.info(f"Using model: {self.model}")
     
     def generate_images(self, output_dir: str) -> List[ImageGenerationResult]:
-        """Generate all images."""
+        """Generate all images with progress reporting."""
         os.makedirs(output_dir, exist_ok=True)
         results = []
         
-        self.logger.info(f"Generating {len(self.positive_prompts)} images using {self.model} model...")
+        total_images = len(self.positive_prompts)
+        self.logger.info(f"Generating {total_images} images using {self.model} model...")
         
-        for i in range(len(self.positive_prompts)):
+        # Report initial progress
+        self._report_progress(0, f"Starting {self.model} image generation")
+        
+        for i in range(total_images):
+            # Report progress for each image
+            progress_percent = int((i / total_images) * 100)
+            self._report_progress(progress_percent, f"Generating image {i+1}/{total_images}")
+            
             result = self._generate_single_image(i, output_dir)
             results.append(result)
             
             if result.success:
-                self.logger.info(f"✓ Image {i+1}/{len(self.positive_prompts)} generated successfully")
+                self.logger.info(f"✓ Image {i+1}/{total_images} generated successfully")
             else:
-                self.logger.error(f"✗ Image {i+1}/{len(self.positive_prompts)} failed: {result.error}")
+                self.logger.error(f"✗ Image {i+1}/{total_images} failed: {result.error}")
             
             # Brief pause between generations to avoid overload
-            if i < len(self.positive_prompts) - 1:
+            if i < total_images - 1:
                 time.sleep(0.5)
+        
+        # Final progress report
+        self._report_progress(100, f"Completed generating {total_images} images")
         
         # Summary
         successful = sum(1 for r in results if r.success)
         self.logger.info(f"Generation complete: {successful}/{len(results)} successful")
         
         return results
+    
+    def _report_progress(self, percent: int, stage: str):
+        """Report progress to stdout for parent process to capture."""
+        # Use a special format that the parent process can parse
+        print(f"PROGRESS:{percent}|{stage}", flush=True)
     
     def _generate_single_image(self, index: int, output_dir: str) -> ImageGenerationResult:
         """Generate a single image with error handling."""

@@ -1,5 +1,5 @@
 # create_video.py
-"""Enhanced video creation pipeline with improved reliability and performance."""
+"""Enhanced video creation pipeline with improved reliability, performance, and progress tracking."""
 
 import os
 import json
@@ -8,7 +8,7 @@ import logging
 import gc
 import glob
 import platform
-from typing import List, Tuple, Dict, Optional, Any
+from typing import List, Tuple, Dict, Optional, Any, Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -351,27 +351,39 @@ class ImageProcessor:
         self.cache.clear()
 
 class VideoCreator:
-    """Main video creation orchestrator."""
-    def __init__(self, config, logger):
+    """Main video creation orchestrator with progress tracking."""
+    def __init__(self, config, logger, progress_callback=None):
         self.config, self.logger = config, logger
+        self.progress_callback = progress_callback
         self.image_processor = self.subtitle_generator = None
     
+    def _report_progress(self, percent: int, stage: str):
+        """Report progress to callback if available."""
+        if self.progress_callback:
+            self.progress_callback(percent, stage)
+    
     def create_video(self, audio_path, images_dir, output_path, paragraph_file, time_stamps_file, **kwargs):
-        """Create video from components with error handling."""
+        """Create video from components with error handling and progress reporting."""
         for k, v in kwargs.items():
-            for obj in [self.config, self.config.subtitles, self.config.transitions, self.config.effects]:
-                if hasattr(obj, k): setattr(obj, k, v)
+            if k != 'progress_callback':  # Don't override config with progress callback
+                for obj in [self.config, self.config.subtitles, self.config.transitions, self.config.effects]:
+                    if hasattr(obj, k): setattr(obj, k, v)
+        
         errors = self.config.validate()
         if errors: raise VideoCreationError(f"Invalid configuration: {', '.join(errors)}")
         video_size = self.config.get_video_dimensions()
         self.image_processor = ImageProcessor(video_size, self.config)
         self.subtitle_generator = SubtitleGenerator(video_size, self.config.subtitles)
         audio_clip = None
+        
         try:
+            self._report_progress(0, "Loading audio")
             self.logger.info(f"Loading audio from {audio_path}")
             audio_clip = AudioFileClip(audio_path)
             audio_duration = audio_clip.duration
             self.logger.info(f"Audio duration: {audio_duration:.2f}s")
+            
+            self._report_progress(10, "Processing text and timestamps")
             with open(paragraph_file, 'r', encoding='utf-8') as f: paragraph_text = f.read().strip()
             timestamps = TimestampData.from_json(time_stamps_file)
             if timestamps and timestamps.validate():
@@ -380,19 +392,32 @@ class VideoCreator:
                 self.logger.warning("No timestamps available, subtitles will be disabled")
                 self.config.subtitles.enabled = False
                 timestamps = None
+            
+            self._report_progress(20, "Loading images")
             image_files = sorted([f for ext in ["png", "jpg", "jpeg", "webp"] 
                                  for f in glob.glob(os.path.join(images_dir, f"*.{ext}"))],
                                 key=lambda f: int(m.group(1)) if (m := re.search(r'(\d+)', os.path.basename(f))) else 0)
             if not image_files: raise VideoCreationError("No images found in directory")
             self.logger.info(f"Found {len(image_files)} images")
+            
+            self._report_progress(30, "Creating image sequence")
             video = self._create_image_sequence(image_files, audio_duration)
+            
+            self._report_progress(60, "Adding audio track")
             video = video.with_audio(audio_clip)
+            
             if self.config.subtitles.enabled and timestamps:
+                self._report_progress(70, "Adding subtitles")
                 segments = self.subtitle_generator.parse_text_segments(paragraph_text, timestamps)
                 video = self.subtitle_generator.add_subtitles(video, segments)
+            
+            self._report_progress(80, "Exporting video")
             self._export_video(video, output_path)
+            
+            self._report_progress(100, "Video creation complete")
             self.logger.info(f"Video creation completed: {output_path}")
             return output_path
+            
         except Exception as e:
             self.logger.error(f"Video creation failed: {e}")
             raise VideoCreationError(f"Failed to create video: {e}")
@@ -402,16 +427,22 @@ class VideoCreator:
             gc.collect()
     
     def _create_image_sequence(self, image_files, audio_duration):
-        """Create video sequence from images with transitions."""
+        """Create video sequence from images with transitions and progress reporting."""
         num_images = len(image_files)
         if num_images == 1:
             clip = self.image_processor.process_image_for_display(image_files[0], audio_duration)
             if not clip: raise VideoCreationError("Failed to process single image")
             return clip
+        
         transition_duration = self.config.transitions.duration
         base_duration = (audio_duration - (num_images - 1) * transition_duration) / num_images
         clips = []
+        
         for i, path in enumerate(image_files):
+            # Report progress for each image
+            progress = 30 + int((i / num_images) * 25)  # 30-55% range
+            self._report_progress(progress, f"Processing image {i+1}/{num_images}")
+            
             duration = audio_duration if i == num_images - 1 else base_duration + transition_duration
             clip = self.image_processor.process_image_for_display(path, duration)
             if clip:
@@ -419,7 +450,10 @@ class VideoCreator:
                 self.logger.debug(f"Image {i}: duration={duration:.2f}s")
             else:
                 self.logger.warning(f"Failed to process image {i}")
+        
         if not clips: raise VideoCreationError("No images could be processed")
+        
+        self._report_progress(55, "Applying transitions")
         if len(clips) > 1 and transition_duration > 0:
             self.logger.info(f"Applying {self.config.transitions.style} transitions ({transition_duration}s)")
             background = self.image_processor.process_image_for_display(image_files[-1], audio_duration)
@@ -427,15 +461,31 @@ class VideoCreator:
             final_video = CompositeVideoClip([background, concatenated])
         else:
             final_video = concatenate_videoclips(clips, method="compose")
+        
         return final_video.with_duration(audio_duration)
     
     def _export_video(self, video, output_path):
-        """Export video with configured settings."""
+        """Export video with configured settings and progress reporting."""
         self.logger.info(f"Exporting video to {output_path}")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         export_params = self.config.get_export_params()
-        export_params['logger'] = None
-        video.write_videofile(output_path, **export_params)
+        
+        # Remove logger from export_params if it exists
+        export_params.pop('logger', None)
+        
+        # Report initial progress
+        self._report_progress(80, "Encoding video...")
+        
+        # Write video with only valid parameters
+        video.write_videofile(
+            output_path, 
+            logger=None,  # Disable moviepy's logger
+            **export_params
+        )
+        
+        # Report completion
+        self._report_progress(100, "Video encoding complete")
+        
         if not os.path.exists(output_path): raise VideoCreationError("Output video was not created")
         self.logger.info(f"Video exported successfully: {os.path.getsize(output_path) / (1024 * 1024):.1f} MB")
 
@@ -443,8 +493,8 @@ def create_video(audio_path, images_dir, output_path, paragraph_file, time_stamp
                 aspect_ratio=(9, 16), transition_duration=0.5, pan_effect=True, zoom_effect=True,
                 log_file_path="video_creation_log.txt", subtitles=True, subtitle_style="modern",
                 highlight_keywords=True, subtitle_animation="phrase", subtitle_position="bottom",
-                transition_style="fade"):
-    """Create video from images and audio with subtitles."""
+                transition_style="fade", progress_callback=None):
+    """Create video from images and audio with subtitles and progress tracking."""
     logger = setup_logger(log_file_path)
     config = VideoConfig(fps=fps, aspect_ratio=aspect_ratio,
                         transitions=TransitionOptions(style=transition_style, duration=transition_duration),
@@ -452,5 +502,5 @@ def create_video(audio_path, images_dir, output_path, paragraph_file, time_stamp
                         subtitles=SubtitleOptions(enabled=subtitles, style=subtitle_style,
                                                 animation=subtitle_animation, position=subtitle_position,
                                                 highlight_keywords=highlight_keywords))
-    creator = VideoCreator(config, logger)
+    creator = VideoCreator(config, logger, progress_callback)
     return creator.create_video(audio_path, images_dir, output_path, paragraph_file, time_stamps_file)
