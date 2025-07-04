@@ -1,4 +1,4 @@
-// Optimized frontend JavaScript
+// Optimized frontend JavaScript with Queue Support
 const state = {
     config: {},
     videos: [],
@@ -8,7 +8,16 @@ const state = {
     currentPage: 1,
     videosPerPage: 12,
     searchQuery: '',
-    filterType: ''
+    filterType: '',
+    // Queue state
+    queue: [],
+    queueProcessing: false,
+    currentQueueIndex: -1,
+    queueStats: {
+        total: 0,
+        completed: 0,
+        failed: 0
+    }
 };
 
 const $ = id => document.getElementById(id);
@@ -86,6 +95,13 @@ const utils = {
         const s = Math.floor(sec % 60);
         return `${m}:${s.toString().padStart(2, '0')}`;
     },
+    formatTime: seconds => {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    },
     escapeHtml: text => {
         const div = document.createElement('div');
         div.textContent = text || '';
@@ -97,7 +113,8 @@ const utils = {
             clearTimeout(timer);
             timer = setTimeout(() => fn(...args), wait);
         };
-    }
+    },
+    generateId: () => `queue-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 };
 
 const ui = {
@@ -142,7 +159,7 @@ const ui = {
                     <p style="margin: 16px 0;">${utils.escapeHtml(msg)}</p>
                     <div style="display: flex; gap: 12px; justify-content: flex-end;">
                         <button class="btn-cancel" style="padding: 10px 20px; background: var(--bg-tertiary); border: none; border-radius: 8px; cursor: pointer;">Cancel</button>
-                        <button class="btn-confirm" style="padding: 10px 20px; background: var(--error); color: white; border: none; border-radius: 8px; cursor: pointer;">Delete</button>
+                        <button class="btn-confirm" style="padding: 10px 20px; background: var(--error); color: white; border: none; border-radius: 8px; cursor: pointer;">Confirm</button>
                     </div>
                 </div>
             `;
@@ -185,6 +202,285 @@ const ui = {
     }
 };
 
+// Queue Management Functions
+const queue = {
+    add(data) {
+        const queueItem = {
+            id: utils.generateId(),
+            ...data,
+            status: 'pending',
+            addedAt: new Date().toISOString()
+        };
+        
+        state.queue.push(queueItem);
+        this.save();
+        this.render();
+        this.updateStats();
+        
+        ui.showNotification(`Added "${data.topic}" to queue`, 'success');
+        return queueItem;
+    },
+    
+    remove(id) {
+        const index = state.queue.findIndex(item => item.id === id);
+        if (index !== -1) {
+            const item = state.queue[index];
+            if (item.status === 'processing') {
+                ui.showNotification('Cannot remove item currently being processed', 'warning');
+                return;
+            }
+            state.queue.splice(index, 1);
+            this.save();
+            this.render();
+            this.updateStats();
+        }
+    },
+    
+    clear() {
+        if (state.queueProcessing) {
+            ui.showNotification('Cannot clear queue while processing', 'warning');
+            return;
+        }
+        state.queue = [];
+        state.queueStats = { total: 0, completed: 0, failed: 0 };
+        this.save();
+        this.render();
+        this.updateStats();
+    },
+    
+    save() {
+        localStorage.setItem('videoGenQueue', JSON.stringify(state.queue));
+    },
+    
+    load() {
+        const saved = localStorage.getItem('videoGenQueue');
+        if (saved) {
+            try {
+                state.queue = JSON.parse(saved);
+                // Reset any 'processing' status to 'pending'
+                state.queue.forEach(item => {
+                    if (item.status === 'processing') item.status = 'pending';
+                });
+            } catch (e) {
+                console.error('Failed to load queue:', e);
+                state.queue = [];
+            }
+        }
+    },
+    
+    render() {
+        const queueList = $('queueList');
+        const emptyQueue = $('emptyQueue');
+        const queueSection = $('queueSection');
+        
+        if (!queueList || !emptyQueue) return;
+        
+        if (state.queue.length === 0) {
+            queueList.style.display = 'none';
+            emptyQueue.style.display = 'block';
+            $('startQueueBtn').disabled = true;
+            $('clearQueueBtn').disabled = true;
+        } else {
+            queueList.style.display = 'block';
+            emptyQueue.style.display = 'none';
+            $('startQueueBtn').disabled = state.queueProcessing;
+            $('clearQueueBtn').disabled = state.queueProcessing;
+            
+            queueList.innerHTML = state.queue.map((item, index) => `
+                <div class="queue-item ${item.status}" data-id="${item.id}">
+                    <div class="queue-item-number">${index + 1}</div>
+                    <div class="queue-item-info">
+                        <div class="queue-item-title">${utils.escapeHtml(item.topic)}</div>
+                        <div class="queue-item-meta">
+                            ${utils.formatText(item.prompt_type)} | ${item.model} | ${utils.formatText(item.voice)}
+                        </div>
+                    </div>
+                    <div class="queue-item-status">
+                        ${this.getStatusIcon(item.status)}
+                        <span>${this.getStatusText(item.status)}</span>
+                    </div>
+                    ${item.status === 'pending' && !state.queueProcessing ? `
+                        <button class="queue-item-remove" onclick="removeFromQueue('${item.id}')">×</button>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+    },
+    
+    getStatusIcon(status) {
+        const icons = {
+            pending: '⏳',
+            processing: '🔄',
+            completed: '✅',
+            failed: '❌'
+        };
+        return icons[status] || '❓';
+    },
+    
+    getStatusText(status) {
+        const texts = {
+            pending: 'Waiting',
+            processing: 'Processing',
+            completed: 'Completed',
+            failed: 'Failed'
+        };
+        return texts[status] || 'Unknown';
+    },
+    
+    updateStats() {
+        const stats = {
+            total: state.queue.length,
+            completed: state.queue.filter(i => i.status === 'completed').length,
+            failed: state.queue.filter(i => i.status === 'failed').length
+        };
+        
+        state.queueStats = stats;
+        
+        $('queueTotal').textContent = stats.total;
+        $('queueCompleted').textContent = stats.completed;
+        $('queueFailed').textContent = stats.failed;
+        
+        // Estimate time (90 seconds per video average)
+        const remaining = stats.total - stats.completed - stats.failed;
+        const estimatedSeconds = remaining * 90;
+        $('queueTime').textContent = remaining > 0 ? utils.formatTime(estimatedSeconds) : '--:--';
+        
+        $('queueStats').style.display = stats.total > 0 ? 'flex' : 'none';
+    },
+    
+    async process() {
+        if (state.queueProcessing) return;
+        
+        const pendingItems = state.queue.filter(i => i.status === 'pending');
+        if (pendingItems.length === 0) {
+            ui.showNotification('No pending items in queue', 'info');
+            return;
+        }
+        
+        state.queueProcessing = true;
+        ui.showNotification(`Starting queue processing (${pendingItems.length} videos)`, 'info');
+        
+        // Update UI
+        const startBtn = $('startQueueBtn');
+        const btnText = $$('.btn-text', startBtn);
+        const btnLoader = $$('.btn-loader', startBtn);
+        if (btnText) btnText.style.display = 'none';
+        if (btnLoader) btnLoader.style.display = 'inline-flex';
+        startBtn.disabled = true;
+        $('clearQueueBtn').disabled = true;
+        
+        // Process each item
+        for (let i = 0; i < state.queue.length; i++) {
+            if (state.queue[i].status !== 'pending') continue;
+            
+            state.currentQueueIndex = i;
+            const item = state.queue[i];
+            
+            // Update status
+            item.status = 'processing';
+            this.save();
+            this.render();
+            
+            try {
+                // Generate video
+                await this.processItem(item);
+                
+                // Mark as completed
+                item.status = 'completed';
+                item.completedAt = new Date().toISOString();
+                ui.showNotification(`✓ Completed: ${item.topic}`, 'success');
+                
+            } catch (error) {
+                // Mark as failed
+                item.status = 'failed';
+                item.error = error.message;
+                item.failedAt = new Date().toISOString();
+                ui.showNotification(`✗ Failed: ${item.topic} - ${error.message}`, 'error');
+            }
+            
+            this.save();
+            this.render();
+            this.updateStats();
+            
+            // Small delay between videos
+            if (i < state.queue.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+        }
+        
+        // Complete
+        state.queueProcessing = false;
+        state.currentQueueIndex = -1;
+        
+        if (btnText) btnText.style.display = 'inline';
+        if (btnLoader) btnLoader.style.display = 'none';
+        startBtn.disabled = false;
+        $('clearQueueBtn').disabled = false;
+        
+        const completed = state.queue.filter(i => i.status === 'completed').length;
+        const failed = state.queue.filter(i => i.status === 'failed').length;
+        
+        ui.showNotification(
+            `Queue processing complete! ✓ ${completed} successful, ✗ ${failed} failed`,
+            failed > 0 ? 'warning' : 'success'
+        );
+        
+        // Refresh gallery
+        await loadVideos();
+    },
+    
+    async processItem(item) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const result = await api.post('/api/generate', {
+                    topic: item.topic,
+                    prompt_type: item.prompt_type,
+                    model: item.model,
+                    voice: item.voice,
+                    fps: item.fps,
+                    aspect_ratio: item.aspect_ratio,
+                    transition_duration: item.transition_duration,
+                    pan_effect: item.pan_effect,
+                    zoom_effect: item.zoom_effect,
+                    subtitles: item.subtitles,
+                    subtitle_style: item.subtitle_style,
+                    subtitle_animation: item.subtitle_animation,
+                    highlight_keywords: item.highlight_keywords
+                });
+                
+                const taskId = result.task_id;
+                
+                // Poll for completion
+                const checkInterval = setInterval(async () => {
+                    try {
+                        const status = await api.get(`/api/status/${taskId}`);
+                        
+                        if (status.status === 'completed') {
+                            clearInterval(checkInterval);
+                            resolve();
+                        } else if (status.status === 'failed') {
+                            clearInterval(checkInterval);
+                            reject(new Error(status.error || 'Generation failed'));
+                        }
+                    } catch (err) {
+                        clearInterval(checkInterval);
+                        reject(err);
+                    }
+                }, 3000);
+                
+                // Timeout after 10 minutes
+                setTimeout(() => {
+                    clearInterval(checkInterval);
+                    reject(new Error('Generation timeout'));
+                }, 600000);
+                
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
+};
+
 async function init() {
     try {
         // Load config
@@ -207,12 +503,26 @@ async function init() {
             }
         }
         
+        // Load queue
+        queue.load();
+        queue.render();
+        queue.updateStats();
+        
         // Setup event listeners
         $('generateForm').onsubmit = handleGenerate;
         $('generateForm').onchange = utils.debounce(() => {
             const data = Object.fromEntries(new FormData($('generateForm')));
             localStorage.setItem('videoGenPrefs', JSON.stringify({ formData: data }));
         }, 1000);
+        
+        $('addToQueueBtn').onclick = handleAddToQueue;
+        $('startQueueBtn').onclick = () => queue.process();
+        $('clearQueueBtn').onclick = async () => {
+            if (await ui.confirm('Clear Queue', 'Are you sure you want to clear the entire queue?')) {
+                queue.clear();
+                ui.showNotification('Queue cleared', 'info');
+            }
+        };
         
         $('refreshGallery').onclick = () => loadVideos(true);
         $('filterPromptType').onchange = handleFilter;
@@ -229,6 +539,10 @@ async function init() {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !state.isGenerating) {
                 $('generateForm').dispatchEvent(new Event('submit'));
             }
+            if ((e.ctrlKey || e.metaKey) && e.key === 'q') {
+                e.preventDefault();
+                $('addToQueueBtn').click();
+            }
         });
         
         // Load videos
@@ -243,7 +557,7 @@ async function init() {
 async function handleGenerate(e) {
     e.preventDefault();
     
-    if (state.isGenerating) {
+    if (state.isGenerating || state.queueProcessing) {
         ui.showNotification('Generation already in progress', 'warning');
         return;
     }
@@ -289,6 +603,43 @@ async function handleGenerate(e) {
         ui.showNotification('Failed to start generation: ' + err.message, 'error');
         resetForm();
     }
+}
+
+function handleAddToQueue(e) {
+    e.preventDefault();
+    
+    const formData = new FormData($('generateForm'));
+    const topic = formData.get('topic')?.trim();
+    
+    if (!topic || topic.length < 3) {
+        ui.showNotification('Topic must be at least 3 characters', 'error');
+        return;
+    }
+    
+    const data = {
+        topic,
+        prompt_type: formData.get('promptType'),
+        model: formData.get('model'),
+        voice: formData.get('voice'),
+        fps: parseInt(formData.get('fps')),
+        aspect_ratio: [
+            parseInt(formData.get('aspectRatio').split(':')[0]),
+            parseInt(formData.get('aspectRatio').split(':')[1])
+        ],
+        transition_duration: parseFloat(formData.get('transitionDuration')),
+        pan_effect: formData.get('panEffect') === 'on',
+        zoom_effect: formData.get('zoomEffect') === 'on',
+        subtitles: formData.get('subtitles') === 'on',
+        subtitle_style: formData.get('subtitleStyle'),
+        subtitle_animation: formData.get('subtitleAnimation'),
+        highlight_keywords: formData.get('highlightKeywords') === 'on'
+    };
+    
+    queue.add(data);
+    
+    // Clear topic field
+    $('topic').value = '';
+    $('topic').focus();
 }
 
 function startProgressMonitoring() {
@@ -493,6 +844,7 @@ function renderPagination(totalPages) {
     container.innerHTML = `<div class="pagination">${btns.join('')}</div>`;
 }
 
+// Global functions
 window.changePage = page => {
     state.currentPage = page;
     renderGallery();
@@ -597,6 +949,10 @@ window.deleteVideo = async id => {
     } catch (err) {
         ui.showNotification('Failed to delete video: ' + err.message, 'error');
     }
+};
+
+window.removeFromQueue = id => {
+    queue.remove(id);
 };
 
 function closeModal() {

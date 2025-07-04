@@ -93,10 +93,15 @@
                         </div>
                     </details>
 
-                    <button type="submit" class="generate-btn">
-                        <span class="btn-text">Generate Video</span>
-                        <span class="btn-loader" style="display: none;">Generating...</span>
-                    </button>
+                    <div class="button-row">
+                        <button type="submit" class="generate-btn">
+                            <span class="btn-text">Generate Video</span>
+                            <span class="btn-loader" style="display: none;">Generating...</span>
+                        </button>
+                        <button type="button" id="addToQueueBtn" class="queue-btn">
+                            <span>➕ Add to Queue</span>
+                        </button>
+                    </div>
                 </form>
 
                 <div id="progressSection" class="progress-section" style="display: none;">
@@ -105,6 +110,43 @@
                         <div class="progress-fill" id="progressFill"></div>
                     </div>
                     <p class="progress-stage" id="progressStage">Initializing...</p>
+                </div>
+            </section>
+
+            <section id="queueSection" class="queue-section">
+                <div class="queue-header">
+                    <h2>Generation Queue</h2>
+                    <div class="queue-controls">
+                        <button id="startQueueBtn" class="start-queue-btn" disabled>
+                            <span class="btn-text">▶ Start Queue</span>
+                            <span class="btn-loader" style="display: none;">Processing...</span>
+                        </button>
+                        <button id="clearQueueBtn" class="clear-queue-btn" disabled>
+                            🗑️ Clear Queue
+                        </button>
+                    </div>
+                </div>
+                <div id="queueList" class="queue-list"></div>
+                <div id="emptyQueue" class="empty-queue">
+                    <p>Queue is empty. Add videos using the "Add to Queue" button above.</p>
+                </div>
+                <div id="queueStats" class="queue-stats" style="display: none;">
+                    <div class="stat-item">
+                        <span class="stat-label">Total:</span>
+                        <span id="queueTotal">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Completed:</span>
+                        <span id="queueCompleted">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Failed:</span>
+                        <span id="queueFailed">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Est. Time:</span>
+                        <span id="queueTime">--:--</span>
+                    </div>
                 </div>
             </section>
 
@@ -139,6 +181,6 @@
         <div id="notificationContainer" class="notification-container"></div>
     </div>
 
-    <script src="script.js?v=2"></script>
+    <script src="script.js?v=3"></script>
 </body>
 </html>
