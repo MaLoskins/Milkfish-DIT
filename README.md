@@ -62,9 +62,9 @@ graph TD
     E -- Final Video --> F[End: Output Video File];
 
     subgraph "Services & APIs"
-        G(Ollama LLM)
-        H(ComfyUI)
-        I(ElevenLabs API)
+        G(Ollama LLM - local)
+        H(ComfyUI - local)
+        I(ElevenLabs API - online-api)
     end
 
     B --> G;
